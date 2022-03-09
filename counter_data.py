@@ -3,20 +3,32 @@ import requests
 from datetime import datetime, timezone, timedelta
 import argparse
 import logging
+import os
 
 import pandas as pd
 import numpy as np
+from sodapy import Socrata
+
 
 import utils
 
 
 DATE_FORMAT_HUMANS = "%Y-%m-%d"
 DATE_FORMAT_API = "%d/%m/%Y"
+DATE_FORMAT_SOCRATA = "%Y-%m-%dT00:00:00.000"
 
 
 DEVICES_ENDPOINT = (
     "https://www.eco-visio.net/api/aladdin/1.0.0/pbl/publicwebpageplus/89?withNull=true"
 )
+
+SO_WEB = os.getenv("SO_WEB")
+SO_TOKEN = os.getenv("SO_TOKEN")
+SO_USER = os.getenv("SO_USER")
+SO_PASS = os.getenv("SO_PASS")
+
+# Socrata dataset IDs
+COUNTERS_DATASET = os.getenv("COUNTERS_DATASET")
 
 
 def handle_date_args(start_string, end_string):
@@ -102,14 +114,44 @@ def get_count_data(device, start_date, end_date):
     if count_data:
         device_df = pd.DataFrame(count_data)
         device_df = device_df.rename(columns={0: "Date", 1: "Count"})
-        device_df["Sensor Location"] = name
+
+        device_df["Count"] = device_df["Count"].astype(int)
+        device_df = device_df[device_df["Count"] > 0]
+        device_df["Sensor Name"] = name
+        device_df["Record ID"] = device_df["Sensor Name"] + device_df["Date"]
+        device_df["Sensor Latitude"] = device["lat"]
+        device_df["Sensor Longitude"] = device["lon"]
         return device_df
     else:
-        return
+        return pd.DataFrame()
+
+
+def to_socrata(df, soda):
+    """
+    Changes the dataframe's format before being sent to Socrata
+
+    Parameters
+    ----------
+    df : Pandas Dataframe
+        Data from the EcoCounters API.
+    soda : SodaPy client object
+
+    Returns
+    -------
+    None.
+
+    """
+    logger.debug(f"{len(df)} records being upsert to Socrata")
+    df["Date"] = pd.to_datetime(df["Date"], infer_datetime_format=True)
+    df["Date"] = df["Date"].dt.strftime(DATE_FORMAT_SOCRATA)
+
+    payload = df.to_dict(orient="records")
+    soda.upsert(COUNTERS_DATASET, payload)
 
 
 def main(args):
     # earliest start_date = "2014-02-26"
+    soda = Socrata(SO_WEB, SO_TOKEN, username=SO_USER, password=SO_PASS, timeout=500,)
 
     # Gets the list of count devices from the API
     res = requests.get(DEVICES_ENDPOINT)
@@ -117,14 +159,10 @@ def main(args):
 
     start_date, end_date = handle_date_args(args.start, args.end)
 
-    df = pd.DataFrame()
-
     for device in devices_dict:
         device_df = get_count_data(device, start_date, end_date)
         if not device_df.empty:
-            df = df.append(pd.DataFrame(device_df))
-
-    return df
+            to_socrata(device_df, soda)
 
 
 if __name__ == "__main__":
@@ -146,4 +184,4 @@ if __name__ == "__main__":
     logger = utils.get_logger(__file__, level=logging.DEBUG)
 
 
-df = main(args)
+main(args)
