@@ -6,7 +6,6 @@ import logging
 import os
 
 import pandas as pd
-import numpy as np
 from sodapy import Socrata
 
 
