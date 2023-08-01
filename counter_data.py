@@ -28,6 +28,7 @@ SO_PASS = os.getenv("SO_PASS")
 
 # Socrata dataset IDs
 COUNTERS_DATASET = os.getenv("COUNTERS_DATASET")
+DEVICE_DATASET = os.getenv("DEVICE_DATASET")
 
 
 def handle_date_args(start_string, end_string):
@@ -113,13 +114,11 @@ def get_count_data(device, start_date, end_date):
     if count_data:
         device_df = pd.DataFrame(count_data)
         device_df = device_df.rename(columns={0: "Date", 1: "Count"})
-
         device_df["Count"] = device_df["Count"].astype(int)
         device_df = device_df[device_df["Count"] > 0]
+        device_df["Sensor ID"] = mainid
         device_df["Sensor Name"] = name
-        device_df["Record ID"] = device_df["Sensor Name"] + device_df["Date"]
-        device_df["Sensor Latitude"] = device["lat"]
-        device_df["Sensor Longitude"] = device["lon"]
+        device_df["Record ID"] = str(mainid) + device_df["Date"]
         return device_df
     else:
         return pd.DataFrame()
@@ -147,6 +146,29 @@ def to_socrata(df, soda):
     payload = df.to_dict(orient="records")
     soda.upsert(COUNTERS_DATASET, payload)
 
+def publish_device_data(soda, device_data):
+    """
+    Upserts data to the socrata dataset for the trail counter device metadata
+
+    Args:
+        soda: SodaPy client object
+        device_data: Pandas dataframe
+            Device metadata from the eco-counters API.
+
+    Returns:
+        None
+
+    """
+    output_fields = ["idPdc", "lat", "lon", "nom"]
+    field_mapping = {
+        "idPdc": "Sensor ID",
+        "lat": "Latitude",
+        "lon": "Longitude",
+        "nom": "Sensor Name"
+    }
+    device_data = device_data[output_fields]
+    device_data.rename(columns=field_mapping, inplace=True)
+    soda.upsert(DEVICE_DATASET, device_data)
 
 def main(args):
     # earliest start_date = "2014-02-26"
@@ -155,6 +177,7 @@ def main(args):
     # Gets the list of count devices from the API
     res = requests.get(DEVICES_ENDPOINT)
     devices_dict = json.loads(res.text)
+    devices_data = pd.DataFrame(devices_dict)
 
     start_date, end_date = handle_date_args(args.start, args.end)
 
